@@ -159,6 +159,55 @@ export async function likeBlog(blog_id: string, path?: string): Promise<ServerFu
     }
 }
 
+export async function removeLikeBlog(blog_id: string, path?: string): Promise<ServerFunctionResponse<boolean | null>> {
+    try {
+        // Match permissions to view user
+        // If the user has the permission to view user, then return the user
+        const t = await matchPermissions(["blogs_like"]);
+        if (!t) return Response("error", null, 401, "You don't have the permission to like blogs");
+        const { session, isMatched, matches } = t;
+
+        if (!isMatched) return Response("error", null, 401, "You don't have the permission to like blogs");
+
+        const client = await clientPromise;
+
+        const db = client.db(config.db.blog_name);
+        const collection = db.collection<DBBlogPostType>("posts");
+
+        const blog = await collection.findOne({
+            _id: new ObjectId(blog_id),
+        });
+
+        if (!blog) return Response("error", null, 404, "Blog not found");
+
+        // If the blog is not published, then only the author can view the blog
+        // Or, if the user has the permission to view draft blogs
+        if (blog.is_published === false)
+            return Response("error", null, 401, "This blog is not published yet");
+
+        // Check if the user has already liked the blog
+        if (!blog.liked_by.find((user) => user.id === session.user.id))
+            return Response("error", null, 401, "You have not liked this blog yet");
+
+        const updatedBlog = await collection.findOneAndUpdate(
+            {
+                _id: new ObjectId(blog_id),
+            },
+            {
+                $inc: { likes: -1 },
+                $pull: { liked_by: await MinifyAuth(session.user) },
+            },
+            { returnDocument: "after" }
+        );
+
+        path && revalidatePath(path);
+        return Response("success", true, 200, "Blog like removed successfully");
+    } catch (error) {
+        console.error(error);
+        return Response("error", null, 500, "Internal server error");
+    }
+}
+
 export async function saveBlog(blog_id: string, path?: string): Promise<ServerFunctionResponse<boolean | null>> {
     try {
         // Match permissions to view user
@@ -332,6 +381,44 @@ export async function searchForBlog(
                 $diacriticSensitive: false,
             },
             is_published: should_view_draft ? { $in: [true, false] } : true,
+        });
+
+        return Response("success", {
+            blogs,
+            total,
+        }, 200, "Blogs fetched successfully");
+    } catch (error) {
+        console.error(error);
+        return Response("error", null, 500, "Internal server error");
+    }
+}
+
+export async function filterBlogs(
+    filter: "views" | "likes" | "saves",
+    limit: number,
+    skip: number,
+): Promise<ServerFunctionResponse<{
+    blogs: WithId<DBBlogPostType>[];
+    total: number;
+} | null>> {
+    try {
+        // Match permissions to view user
+        // If the user has the permission to view user, then return the user
+        // await matchPermissions(["blogs_view_published", "blogs_view_draft"]);
+
+        const client = await clientPromise;
+
+        const db = client.db(config.db.blog_name);
+        const collection = db.collection<DBBlogPostType>("posts");
+
+        const blogs = await collection.find({
+            is_published: true,
+        }).sort({
+            [filter]: -1,
+        }).skip(skip).limit(limit).toArray();
+
+        const total = await collection.countDocuments({
+            is_published: true,
         });
 
         return Response("success", {
