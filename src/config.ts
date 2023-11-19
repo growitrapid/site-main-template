@@ -27,6 +27,7 @@ export default {
         auth_name: "auth",
         root_name: "root",
         blog_name: "blog",
+        course_name: "courses"
     },
 
     icons: [
